@@ -82,7 +82,7 @@ jobs:
           fi
           
       - name: 上传固件到 artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ImmortalWrt-${{ github.event.inputs.device }}-firmware
           path: /output/*
