@@ -1,0 +1,89 @@
+name: Build ImmortalWrt Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: '选择设备型号'
+        required: true
+        default: 'mt7981'
+        type: choice
+        options:
+          - mt7981
+          - mt7986
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    container:
+      image: debian:11
+      options: --privileged
+
+    steps:
+      - name: 设置环境变量
+        run: |
+          echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" >> $GITHUB_ENV
+          echo "DEBIAN_FRONTEND=noninteractive" >> $GITHUB_ENV
+          
+      - name: 安装依赖
+        run: |
+          apt-get update -y
+          apt-get full-upgrade -y
+          apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+            file wget sudo python3 python3-pip python3-setuptools python3-wheel
+
+      - name: 创建非特权用户
+        run: |
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+          
+      - name: 切换到非特权用户并克隆源码
+        run: |
+          sudo -u builder bash -c '
+            git clone -b 2410 --single-branch --filter=blob:none https://github.com/padavanonly/immortalwrt-mt798x-24.10 immortalwrt-mt798x-24.10
+            cd immortalwrt-mt798x-24.10
+            ./scripts/feeds update -a
+            ./scripts/feeds install -a
+          '
+          
+      - name: 配置编译选项
+        run: |
+          cd immortalwrt-mt798x-24.10
+          case "${{ github.event.inputs.device }}" in
+            "mt7981")
+              sudo -u builder cp -f defconfig/mt7981-ax3000.config .config
+              sudo -u builder sed -i 's/CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-emmc=n/CONFIG_TARGET_mediatek_mt7981_DEVICE_cmcc_rax3000m-emmc=y/g' .config
+              ;;
+            "mt7986")
+              sudo -u builder cp -f defconfig/mt7986-ax6000.config .config
+              ;;
+          esac
+          
+      - name: 编译固件
+        run: |
+          cd immortalwrt-mt798x-24.10
+          sudo -u builder make -j$(nproc) download V=s
+          sudo -u builder make -j$(nproc) V=s
+          
+      - name: 收集固件文件
+        id: collect
+        run: |
+          cd immortalwrt-mt798x-24.10/bin/targets/*/*
+          FILES=$(ls *.bin 2>/dev/null || true)
+          if [ -n "$FILES" ]; then
+            mkdir -p /output
+            cp $FILES /output/
+            echo "固件文件已收集"
+            echo "firmware_files=$(ls /output/ | tr '\n' ' ')" >> $GITHUB_ENV
+          else
+            echo "未找到固件文件"
+            exit 1
+          fi
+          
+      - name: 上传固件到 artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ImmortalWrt-${{ github.event.inputs.device }}-firmware
+          path: /output/*
+          retention-days: 7
